@@ -21,6 +21,7 @@
 
 #define KILO_VERSION "0.0.1"
 #define KILO_TAB_STOP 8
+#define KILO_QUIT_TIMES 3
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -234,12 +235,42 @@ void editorAppendRow(char* s, size_t len) {
 	E.dirty++;
 }
 
+void editorFreeRow(erow* row) {
+	free(row->render);
+	free(row->chars);
+}
+
+void editorDelRow(int at) {
+	if (at < 0 || at >= E.numrows) return;
+	editorFreeRow(&E.row[at]);
+	memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+	E.numrows--;
+	E.dirty++;
+}
+
 void editorRowInsertChar(erow* row, int at, int c) {
 	if (at < 0 || at > row->size) at = row->size;
 	row->chars = realloc(row->chars, row->size + 2);
 	memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
 	row->size++;
 	row->chars[at] = c;
+	editorUpdateRow(row);
+	E.dirty++;
+}
+
+void editorRowAppendString(erow* row, char* s, size_t len) {
+	row->chars = realloc(row->chars, row->size + len + 1);
+	memcpy(&row->chars[row->size], s, len);
+	row->size += len;
+	row->chars[row->size] = '\0';
+	editorUpdateRow(row);
+	E.dirty++;
+}
+
+void editorRowDelChar(erow* row, int at) {
+	if (at < 0 || at >= row->size) return;
+	memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+	row->size--;
 	editorUpdateRow(row);
 	E.dirty++;
 }
@@ -252,6 +283,23 @@ void editorInsertChar(int c) {
 	}
 	editorRowInsertChar(&E.row[E.cy], E.cx, c);
 	E.cx++;
+}
+
+void editorDelChar() {
+	if (E.cy == E.numrows) return;
+	if (E.cx == 0 && E.cy == 0) return;
+
+	erow* row = &E.row[E.cy];
+	if (E.cx > 0) {
+		editorRowDelChar(row, E.cx - 1);
+		E.cx--;
+	}
+	else {
+		E.cx = E.row[E.cy - 1].size;
+		editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
+		editorDelRow(E.cy);
+		E.cy--;
+	}
 }
 
 /*** file i/o ***/
@@ -497,6 +545,8 @@ void editorMoveCursor(int key) {
 }
 
 void editorProcessKeypress() {
+	static int quit_times = KILO_QUIT_TIMES;
+
 	int c = editorReadKey();
 
 	switch (c) {
@@ -504,6 +554,11 @@ void editorProcessKeypress() {
 		break;
 
 	case CTRL_KEY('z'):
+		if (E.dirty && quit_times > 0) {
+			editorSetStatusMessage("WARNING!!! File has unsaved changes." "Press Ctrl-Z %d more times to quit.", quit_times);
+			quit_times--;
+			return;
+		}
 		write(STDOUT_FILENO, "\x1b[2J", 4);
 		write(STDOUT_FILENO, "\x1b[H", 3);
 		exit(0);
@@ -524,6 +579,8 @@ void editorProcessKeypress() {
 	case BACKSPACE:
 	case CTRL_KEY('h'):
 	case DEL_KEY:
+		if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+		editorDelChar();
 		break;
 
 	case PAGE_UP:
@@ -555,6 +612,8 @@ void editorProcessKeypress() {
 		editorInsertChar(c);
 		break;
 	}
+
+	quit_times = KILO_QUIT_TIMES;
 }
 
 /*** init ***/
